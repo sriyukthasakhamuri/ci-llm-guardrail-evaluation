@@ -1,0 +1,5 @@
+nemoguardrails
+langchain-ollama
+pydantic
+pytest
+requests
