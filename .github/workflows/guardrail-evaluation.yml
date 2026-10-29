@@ -27,3 +27,10 @@ jobs:
       - name: Run CI policy evaluation
         run: |
           python -m app.evaluation.ci_policy_gate
+
+      - name: Upload guardrail evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardrail-evaluation-report
+          path: reports/guardrail_ci_report.json

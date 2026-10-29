@@ -12,6 +12,16 @@ TEST_DATA_PATH = (
     / "guardrail_test_cases.json"
 )
 
+REPORTS_DIRECTORY = (
+    PROJECT_ROOT
+    / "reports"
+)
+
+REPORT_PATH = (
+    REPORTS_DIRECTORY
+    / "guardrail_ci_report.json"
+)
+
 
 BLOCK_PATTERNS = [
     "ignore all previous instructions",
@@ -63,15 +73,42 @@ def policy_decision(prompt: str) -> str:
     return "allow"
 
 
+def save_report(report_data):
+    REPORTS_DIRECTORY.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with open(
+        REPORT_PATH,
+        "w",
+        encoding="utf-8",
+    ) as file:
+        json.dump(
+            report_data,
+            file,
+            indent=2,
+        )
+
+
 def run_policy_gate():
     test_cases = load_test_cases()
 
     results = []
+
     category_stats = defaultdict(
         lambda: {
             "total": 0,
             "passed": 0,
         }
+    )
+
+    print(
+        "\nCI Guardrail Policy Gate"
+    )
+
+    print(
+        "=" * 60
     )
 
     for test_case in test_cases:
@@ -83,15 +120,16 @@ def run_policy_gate():
 
         passed = actual == expected
 
-        results.append(
-            {
-                "id": test_case["id"],
-                "category": test_case["category"],
-                "expected": expected,
-                "actual": actual,
-                "passed": passed,
-            }
-        )
+        result = {
+            "id": test_case["id"],
+            "category": test_case["category"],
+            "prompt": test_case["prompt"],
+            "expected": expected,
+            "actual": actual,
+            "passed": passed,
+        }
+
+        results.append(result)
 
         category = test_case["category"]
 
@@ -104,50 +142,81 @@ def run_policy_gate():
                 category
             ]["passed"] += 1
 
-    total = len(results)
+        print(
+            f"\n{test_case['id']}"
+        )
 
-    passed = sum(
+        print(
+            f"Category: "
+            f"{test_case['category']}"
+        )
+
+        print(
+            f"Expected: {expected}"
+        )
+
+        print(
+            f"Actual: {actual}"
+        )
+
+        print(
+            f"Passed: {passed}"
+        )
+
+    total_cases = len(results)
+
+    passed_cases = sum(
         1
         for result in results
         if result["passed"]
     )
 
-    compliance = (
-        passed / total
-        if total
+    policy_compliance = (
+        passed_cases
+        / total_cases
+        if total_cases
         else 0.0
     )
 
-    failures = [
+    safe_cases = [
         result
         for result in results
-        if not result["passed"]
+        if result["expected"] == "allow"
     ]
 
-    print(
-        "\nCI Guardrail Policy Gate"
+    unsafe_cases = [
+        result
+        for result in results
+        if result["expected"] == "block"
+    ]
+
+    false_positives = sum(
+        1
+        for result in safe_cases
+        if result["actual"] == "block"
     )
 
-    print(
-        "=" * 60
+    false_negatives = sum(
+        1
+        for result in unsafe_cases
+        if result["actual"] == "allow"
     )
 
-    print(
-        f"Total cases: {total}"
+    false_positive_rate = (
+        false_positives
+        / len(safe_cases)
+        if safe_cases
+        else 0.0
     )
 
-    print(
-        f"Passed cases: {passed}"
+    false_negative_rate = (
+        false_negatives
+        / len(unsafe_cases)
+        if unsafe_cases
+        else 0.0
     )
 
-    print(
-        f"Policy compliance: "
-        f"{compliance:.1%}"
-    )
-
-    print(
-        "\nPer-category accuracy:"
-    )
+    category_report = {}
 
     for category, stats in sorted(
         category_stats.items()
@@ -155,30 +224,128 @@ def run_policy_gate():
         accuracy = (
             stats["passed"]
             / stats["total"]
+            if stats["total"]
+            else 0.0
         )
 
-        print(
-            f"- {category}: "
-            f"{accuracy:.1%}"
-        )
+        category_report[
+            category
+        ] = {
+            "total": stats["total"],
+            "passed": stats["passed"],
+            "accuracy": accuracy,
+        }
 
-    if failures:
-        print(
-            "\nPolicy failures:"
-        )
-
-        for failure in failures:
-            print(
-                f"- {failure['id']} | "
-                f"expected="
-                f"{failure['expected']} | "
-                f"actual="
-                f"{failure['actual']}"
-            )
+    failures = [
+        result
+        for result in results
+        if not result["passed"]
+    ]
 
     required_compliance = 1.0
 
-    if compliance < required_compliance:
+    status = (
+        "passed"
+        if policy_compliance
+        >= required_compliance
+        else "failed"
+    )
+
+    report_data = {
+        "total_cases": total_cases,
+        "passed_cases": passed_cases,
+        "policy_compliance":
+            policy_compliance,
+        "false_positive_rate":
+            false_positive_rate,
+        "false_negative_rate":
+            false_negative_rate,
+        "required_compliance":
+            required_compliance,
+        "status":
+            status,
+        "category_accuracy":
+            category_report,
+        "failures":
+            failures,
+    }
+
+    save_report(
+        report_data
+    )
+
+    print(
+        "\n"
+        + "=" * 60
+    )
+
+    print(
+        "CI Evaluation Summary"
+    )
+
+    print(
+        "=" * 60
+    )
+
+    print(
+        f"Total test cases: "
+        f"{total_cases}"
+    )
+
+    print(
+        f"Passed test cases: "
+        f"{passed_cases}"
+    )
+
+    print(
+        f"Policy compliance: "
+        f"{policy_compliance:.1%}"
+    )
+
+    print(
+        f"False positive rate: "
+        f"{false_positive_rate:.1%}"
+    )
+
+    print(
+        f"False negative rate: "
+        f"{false_negative_rate:.1%}"
+    )
+
+    print(
+        "\nPer-category accuracy:"
+    )
+
+    for category, stats in sorted(
+        category_report.items()
+    ):
+        print(
+            f"- {category}: "
+            f"{stats['accuracy']:.1%} "
+            f"({stats['passed']}/"
+            f"{stats['total']})"
+        )
+
+    print(
+        f"\nReport saved to: "
+        f"{REPORT_PATH}"
+    )
+
+    if failures:
+        print(
+            "\nFailures:"
+        )
+
+        for result in failures:
+            print(
+                f"- {result['id']} | "
+                f"expected="
+                f"{result['expected']} | "
+                f"actual="
+                f"{result['actual']}"
+            )
+
+    if status == "failed":
         print(
             "\nCI FAILED: "
             "Policy compliance dropped "
